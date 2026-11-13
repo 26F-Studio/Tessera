@@ -1,0 +1,12 @@
+.git
+.gitignore
+.runtime
+deploy
+node_modules
+test
+coverage
+.env
+.env.*
+README.md
+CHANGELOG.md
+bun.lockb

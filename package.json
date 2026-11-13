@@ -1,0 +1,31 @@
+{
+  "name": "@26f-studio/tessera",
+  "version": "0.1.0",
+  "description": "Identity and authorization for 26F Studio.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "start": "bun src/index.ts",
+    "migrate": "bun src/migrate.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "engines": {
+    "bun": "1.4.2"
+  },
+  "dependencies": {
+    "@elysiajs/cors": "1.4.2",
+    "better-auth": "1.7.7",
+    "elysia": "1.4.30",
+    "nodemailer": "10.0.15",
+    "pg": "8.23.1",
+    "sharp": "0.35.5"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.2",
+    "@types/nodemailer": "8.0.2",
+    "@types/pg": "8.23.1",
+    "typescript": "7.0.2"
+  }
+}
