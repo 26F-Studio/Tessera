@@ -1,0 +1,166 @@
+# Fixture integration topology: run the rewritten services as containers against
+# the existing local fixtures instead of a fresh deployment.
+#
+# Host networking is intentional. It lets the already-validated protected fixture
+# environment files under Tessera/.runtime/application be reused unchanged: the
+# services reach the fixture PostgreSQL (127.0.0.1:15436), the fixture Mailpit
+# (127.0.0.1:11025) and bind the same loopback addresses the native processes
+# use. Secrets are never restated here; only the public TLS topology is
+# overridden, and deploy/.env is not required.
+#
+# Prerequisites:
+#   * fixture PostgreSQL (postgres:18.6) and Mailpit are running;
+#   * the native Tessera and Cadence processes are stopped (the containers bind
+#     the same loopback ports);
+#   * https://localhost:17445 and https://127.0.0.1:17446 are served either by
+#     the existing fixture Caddy (default) or by this stack's "edge" profile
+#     after stopping that Caddy.
+#   * FIXTURE_TLS_DIR and FIXTURE_GAME_ROOTS may select a fresh local certificate
+#     directory and source-built Web roots without replacing historical fixtures.
+#
+# Usage:
+#   docker compose -f deploy/compose.local.yml up --build -d tessera cadence website
+#   docker compose -f deploy/compose.local.yml --profile edge up -d proxy
+#   docker compose -f deploy/compose.local.yml --profile tools run --rm tools backup ...
+name: techmino-online-fixture
+
+volumes:
+  # Fresh replay storage for this stack; the fixture's earlier replay directory
+  # belongs to the previous database.
+  cadence-replays:
+
+services:
+  tessera:
+    image: techmino-tessera:${IMAGE_TAG:-local}
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    network_mode: host
+    env_file:
+      - ../.runtime/application/tessera.env
+    environment:
+      # TLS terminates at the proxy; the application stays on loopback HTTP. The
+      # public origin must be the origin the browser actually uses.
+      NODE_ENV: development
+      PUBLIC_ORIGIN: https://localhost:17445
+      CORS_ORIGINS: https://localhost:17445
+      HOST: 127.0.0.1
+      PORT: "17436"
+      TRUSTED_PROXY_IPS: 127.0.0.1
+      # Optional: export ACCOUNT_ADMIN_IDS to exercise account administration.
+      ACCOUNT_ADMIN_IDS: ${ACCOUNT_ADMIN_IDS:-}
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  cadence:
+    image: techmino-cadence:${IMAGE_TAG:-local}
+    build:
+      context: ../../../OtherProjects/Cadence
+      dockerfile: Dockerfile
+      additional_contexts:
+        techmino: ../../../OtherProjects/Techmino
+    network_mode: host
+    env_file:
+      - ../.runtime/application/cadence.env
+    environment:
+      CADENCE_BIND: 127.0.0.1:17437
+      CADENCE_DEV: "true"
+      TESSERA_ORIGIN: https://localhost:17445
+      CADENCE_TESSERA_CA_FILE: /run/tessera-ca/ca.pem
+      CADENCE_PUBLIC_ORIGIN: https://127.0.0.1:17446
+      CADENCE_ALLOWED_ORIGINS: https://localhost:17445,https://127.0.0.1:17446
+      CADENCE_TRUSTED_PROXIES: 127.0.0.1/32
+      # Mount the volume at the path the image already creates with the cadence
+      # user's ownership (0700, uid 10002): a named volume inherits that
+      # ownership on first use, while an arbitrary path would be created empty
+      # and root-owned, leaving the service unable to publish replays.
+      CADENCE_REPLAY_DIR: /var/lib/cadence/replays
+      # Optional: export CADENCE_GAME_ADMINS to exercise game administration.
+      CADENCE_GAME_ADMINS: ${CADENCE_GAME_ADMINS:-}
+    volumes:
+      # The fixture CA is certificate material and must be readable by the
+      # unprivileged container user:
+      #   chmod 0644 .runtime/application/tls/ca.pem
+      - ${FIXTURE_TLS_DIR:-../.runtime/application/tls}/ca.pem:/run/tessera-ca/ca.pem:ro
+      - cadence-replays:/var/lib/cadence/replays
+    cpus: 4
+    mem_limit: 8g
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  # Static account website image. The image always serves plain HTTP on 8080; the
+  # edge proxy owns TLS. Published on loopback only.
+  website:
+    image: techmino-account-website:${IMAGE_TAG:-local}
+    build:
+      context: ../../../community-projects/26f-studio/26f-studio
+      dockerfile: Dockerfile
+      args:
+        ACCOUNT_HOST: localhost
+        ACCOUNT_PORT: "17445"
+        GAME_HOST: 127.0.0.1
+        GAME_PORT: "17446"
+    ports:
+      - "127.0.0.1:18035:8080"
+    restart: unless-stopped
+
+  # Bundled edge proxy using this repository's Caddyfile and the fixture TLS
+  # material. Requires the fixture Caddy to be stopped first; otherwise keep the
+  # fixture Caddy and do not enable this profile.
+  proxy:
+    image: caddy:2.11-alpine
+    profiles: ["edge"]
+    network_mode: host
+    environment:
+      ACCOUNT_HOST: localhost
+      ACCOUNT_PORT: "17445"
+      GAME_HOST: 127.0.0.1
+      GAME_PORT: "17446"
+      PROXY_BIND: 127.0.0.1
+      TESSERA_UPSTREAM: 127.0.0.1:17436
+      CADENCE_UPSTREAM: 127.0.0.1:17437
+      WEBSITE_UPSTREAM: 127.0.0.1:18035
+      GAME_ROOTS: /srv/game-roots
+    volumes:
+      - ./proxy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${FIXTURE_GAME_ROOTS:-../.runtime/application/web-games}:/srv/game-roots:ro
+      - ${FIXTURE_TLS_DIR:-../.runtime/application/tls}/localhost.pem:/run/tls/account.pem:ro
+      - ${FIXTURE_TLS_DIR:-../.runtime/application/tls}/localhost.key:/run/tls/account.key:ro
+      - ${FIXTURE_TLS_DIR:-../.runtime/application/tls}/localhost.pem:/run/tls/game.pem:ro
+      - ${FIXTURE_TLS_DIR:-../.runtime/application/tls}/localhost.key:/run/tls/game.key:ro
+    restart: unless-stopped
+
+  # Local-only verification inbox. This is not external mail delivery.
+  mailpit:
+    image: axllent/mailpit:v1.31.4
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: "1"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "1"
+    ports:
+      - "127.0.0.1:11025:1025"
+      - "127.0.0.1:18025:8025"
+    restart: unless-stopped
+
+  # Backup and restore against the fixture PostgreSQL. /fixture holds the
+  # protected fixture environment files (read-only); the admin URL is read from
+  # the fixture probe environment file, so no credential is restated here.
+  #   docker compose -f deploy/compose.local.yml --profile tools run --rm tools \
+  #     backup --out-dir /backup/<stamp> --env-dir /fixture --replay-dir /replays --confirm-drained
+  #   docker compose -f deploy/compose.local.yml --profile tools run --rm tools \
+  #     restore --backup-dir /backup/<stamp> --dest-dir /restored/<stamp> \
+  #     --tessera-env /fixture/tessera.env --cadence-env /fixture/cadence.env \
+  #     --admin-url-file /fixture-admin.env
+  tools:
+    image: postgres:18.6-alpine
+    profiles: ["tools"]
+    network_mode: host
+    entrypoint: ["/bin/bash", "/opt/tools/entrypoint.sh"]
+    volumes:
+      - ./tools:/opt/tools:ro
+      - ../.runtime/application:/fixture:ro
+      - ../.runtime/probe.env:/fixture-admin.env:ro
+      - ./backups:/backup
+      - ./restored:/restored
+      - cadence-replays:/replays:ro
+      - ../../../OtherProjects/Cadence/sql:/deploy/cadence-sql:ro
+    restart: "no"

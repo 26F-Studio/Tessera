@@ -1,0 +1,11 @@
+# Operator configuration and generated material. Never commit either: the
+# generated runtime directory holds role passwords, session secrets, resource
+# secrets, SMTP credentials and private keys copied from the operator.
+.env
+runtime/
+game-roots/play/techmino/*
+!game-roots/play/techmino/.gitkeep
+game-roots/play/techmino-galaxy/*
+!game-roots/play/techmino-galaxy/.gitkeep
+backups/
+restored/

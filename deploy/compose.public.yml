@@ -1,0 +1,8 @@
+# Public ACME deployment: set TLS_MODE=automatic in deploy/.env and bootstrap
+# without operator certificate files. Both public origins use port 443.
+# Keep proxy-data across upgrades: it owns the ACME accounts and certificates.
+services:
+  proxy:
+    ports: !override
+      - "80:80"
+      - "443:443"

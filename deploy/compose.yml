@@ -1,0 +1,230 @@
+# Self-hosted Techmino online stack.
+#
+# PostgreSQL (two databases with separate migration-owner and runtime-DML roles),
+# Tessera (accounts, product sessions, website APIs), Cadence (rooms, matches,
+# replays), the static account website, and the edge TLS proxy that owns the
+# public origins.
+#
+# Configuration: deploy/.env (operator input, see deploy/.env.example) plus the
+# generated, protected deploy/runtime/*.env files written by deploy/bootstrap.sh.
+# Never commit those files and never paste their contents into logs or issues.
+#
+# Validate without printing resolved values:
+#   docker compose -f deploy/compose.yml config --quiet
+# Start, including the one-shot migration services:
+#   docker compose -f deploy/compose.yml up --build -d
+name: techmino-online
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+networks:
+  # Public-facing hop: proxy, website and the two application services.
+  frontend:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
+  # Database hop. It has no route to the outside.
+  backend:
+    driver: bridge
+    internal: true
+
+volumes:
+  postgres-data:
+  cadence-replays:
+  proxy-data:
+
+services:
+  postgres:
+    image: postgres:18.6-alpine
+    env_file:
+      - ./runtime/postgres.env
+    environment:
+      POSTGRES_INITDB_ARGS: --data-checksums
+    volumes:
+      # PostgreSQL 18 images keep PGDATA in a versioned subdirectory and require
+      # the mount at /var/lib/postgresql (not .../data).
+      - postgres-data:/var/lib/postgresql
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+    logging: *logging
+
+  # One-shot schema migration as the schema-owning role. Runtime roles never
+  # execute DDL.
+  tessera-migrate:
+    image: techmino-tessera:${IMAGE_TAG:-local}
+    command: ["bun", "src/migrate.ts"]
+    env_file:
+      - ./runtime/tessera.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend
+    restart: "no"
+    logging: *logging
+
+  tessera:
+    image: techmino-tessera:${IMAGE_TAG:-local}
+    build:
+      context: ${TESSERA_REPO_DIR:-..}
+      dockerfile: Dockerfile
+    env_file:
+      - ./runtime/tessera.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      tessera-migrate:
+        condition: service_completed_successfully
+    networks:
+      - frontend
+      - backend
+    stop_grace_period: 30s
+    restart: unless-stopped
+    logging: *logging
+
+  cadence-migrate:
+    image: techmino-cadence:${IMAGE_TAG:-local}
+    command: ["migrate"]
+    env_file:
+      - ./runtime/cadence.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend
+    restart: "no"
+    logging: *logging
+
+  cadence:
+    image: techmino-cadence:${IMAGE_TAG:-local}
+    build:
+      context: ${CADENCE_REPO_DIR:-../../../OtherProjects/Cadence}
+      dockerfile: Dockerfile
+      additional_contexts:
+        techmino: ${TECHMINO_SOURCE_DIR:-../../../OtherProjects/Techmino}
+    env_file:
+      - ./runtime/cadence.env
+    volumes:
+      - cadence-replays:/var/lib/cadence/replays
+      # Optional account-host CA copied by bootstrap.sh (may be empty).
+      - ./runtime/tls:/run/tessera-ca:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      cadence-migrate:
+        condition: service_completed_successfully
+      tessera:
+        condition: service_healthy
+    networks:
+      frontend:
+        # Static address: Cadence refuses to bind a non-private address in
+        # production, and the proxy is its only trusted peer.
+        ipv4_address: 172.28.0.21
+      backend: {}
+    cpus: 4
+    mem_limit: 8g
+    stop_grace_period: 30s
+    restart: unless-stopped
+    logging: *logging
+
+  website:
+    image: techmino-account-website:${IMAGE_TAG:-local}
+    build:
+      context: ${WEBSITE_REPO_DIR:-../../../community-projects/26f-studio/26f-studio}
+      dockerfile: Dockerfile
+      args:
+        ACCOUNT_HOST: ${ACCOUNT_HOST:?ACCOUNT_HOST is required}
+        ACCOUNT_PORT: ${ACCOUNT_PORT:-443}
+        GAME_HOST: ${GAME_HOST:?GAME_HOST is required}
+        GAME_PORT: ${GAME_PORT:-443}
+    networks:
+      - frontend
+    restart: unless-stopped
+    logging: *logging
+
+  proxy:
+    image: caddy:2.11-alpine
+    environment:
+      ACCOUNT_HOST: ${ACCOUNT_HOST:?ACCOUNT_HOST is required}
+      ACCOUNT_PORT: ${ACCOUNT_PORT:-443}
+      GAME_HOST: ${GAME_HOST:?GAME_HOST is required}
+      GAME_PORT: ${GAME_PORT:-443}
+      PROXY_BIND: ${PROXY_BIND:-0.0.0.0}
+      TLS_MODE: ${TLS_MODE:-manual}
+      TESSERA_UPSTREAM: tessera:17436
+      CADENCE_UPSTREAM: cadence:17437
+      WEBSITE_UPSTREAM: website:8080
+      GAME_ROOTS: /srv/game-roots
+    volumes:
+      - ./proxy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${GAME_ROOTS_DIR:-./game-roots}:/srv/game-roots:ro
+      - ./runtime/tls:/run/tls:ro
+      - proxy-data:/data
+    ports:
+      - "${ACCOUNT_PORT:-443}:${ACCOUNT_PORT:-443}"
+      - "${GAME_PORT:-443}:${GAME_PORT:-443}"
+    depends_on:
+      - tessera
+      - cadence
+      - website
+    networks:
+      frontend:
+        # Static address: it is the only peer listed in Tessera's
+        # TRUSTED_PROXY_IPS and Cadence's CADENCE_TRUSTED_PROXIES, and both
+        # public hostnames resolve to it inside the network so Cadence can reach
+        # the account origin over the real TLS certificate.
+        ipv4_address: 172.28.0.10
+        aliases:
+          - ${ACCOUNT_HOST:?ACCOUNT_HOST is required}
+          - ${GAME_HOST:?GAME_HOST is required}
+    restart: unless-stopped
+    logging: *logging
+
+  # Local mail fixture only. It is never started by a plain `up`, requires
+  # MAIL_MODE=local-fixture, and is not a mail-delivery claim.
+  mailpit:
+    image: axllent/mailpit:v1.31.4
+    profiles: ["local-mail"]
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: "1"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "1"
+    ports:
+      - "127.0.0.1:${MAILPIT_SMTP_PORT:-11025}:1025"
+      - "127.0.0.1:${MAILPIT_HTTP_PORT:-18025}:8025"
+    networks:
+      - frontend
+    restart: unless-stopped
+    logging: *logging
+
+  # Manual backup and restore tools. Started explicitly:
+  #   docker compose -f deploy/compose.yml --profile tools run --rm tools backup ...
+  tools:
+    image: postgres:18.6-alpine
+    profiles: ["tools"]
+    entrypoint: ["/bin/bash", "/opt/tools/entrypoint.sh"]
+    volumes:
+      - ./tools:/opt/tools:ro
+      - ./runtime:/deploy/runtime:ro
+      - ${BACKUP_DIR:-./backups}:/backup
+      - ${RESTORED_DIR:-./restored}:/restored
+      - cadence-replays:/replays:ro
+      - ${CADENCE_REPO_DIR:-../../../OtherProjects/Cadence}/sql:/deploy/cadence-sql:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend
+    restart: "no"
+    logging: *logging

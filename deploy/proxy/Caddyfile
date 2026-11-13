@@ -1,0 +1,105 @@
+# Edge TLS proxy for the Techmino online stack.
+#
+# TLS_MODE selects operator-provided certificates or Caddy's public ACME
+# lifecycle. The empty automatic snippets deliberately retain Caddy's defaults.
+# Every value comes from the deployment environment, never a client request.
+(https_manual) {
+	auto_https off
+}
+(https_automatic) {
+}
+(tls_manual) {
+	tls /run/tls/{args[0]}.pem /run/tls/{args[0]}.key
+}
+(tls_automatic) {
+}
+
+{
+	admin off
+	persist_config off
+	import https_{$TLS_MODE:manual}
+	# Runtime proxy errors otherwise include callback/ticket queries and headers.
+	# Keep method/status/error diagnostics, not request credentials or identities.
+	log default {
+		format filter {
+			wrap json
+			fields {
+				request>uri delete
+				request>headers delete
+				request>remote_ip delete
+				request>remote_port delete
+				request>client_ip delete
+			}
+		}
+	}
+	# Only TCP ports are published, so do not advertise HTTP/3 over UDP.
+	servers {
+		protocols h1 h2
+	}
+}
+
+# Account origin: account website, Better Auth, Tessera product APIs, and the
+# separately built game roots served at /play/*. The account and product-session
+# cookies are scoped to this host and are preserved here.
+https://{$ACCOUNT_HOST}:{$ACCOUNT_PORT} {
+	bind {$PROXY_BIND}
+	import tls_{$TLS_MODE:manual} account
+	encode zstd gzip
+	header {
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# Enable strict transport security only once the operator is sure that
+		# every account subdomain is HTTPS-only:
+		# Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	}
+
+	# Tessera receives exactly one client address: this proxy deletes any
+	# client-supplied forwarding headers and sets its own sanitized value. Only
+	# the proxy address is listed in Tessera's TRUSTED_PROXY_IPS.
+	@tessera path /api/auth/* /v1/* /health/*
+	handle @tessera {
+		reverse_proxy {$TESSERA_UPSTREAM} {
+			header_up -Forwarded
+			header_up -X-Forwarded-For
+			header_up -X-Forwarded-Host
+			header_up -X-Forwarded-Proto
+			header_up -X-Real-IP
+			header_up X-Real-IP {remote_host}
+		}
+	}
+
+	# Real game builds (Web/WASM) are served same-origin so browser clients keep
+	# an exact origin. Populate the mounted game-roots directory with the actual
+	# release build; nothing here invents game content.
+	handle /play/* {
+		root * {$GAME_ROOTS}
+		file_server
+	}
+
+	handle {
+		reverse_proxy {$WEBSITE_UPSTREAM}
+	}
+}
+
+# Game origin: Cadence HTTP and WebSocket only.
+#
+# Account and product-session cookies are never forwarded to Cadence, and the
+# client-supplied forwarding chain is replaced with the sanitized client
+# address that Cadence accepts from its configured trusted proxy.
+https://{$GAME_HOST}:{$GAME_PORT} {
+	bind {$PROXY_BIND}
+	import tls_{$TLS_MODE:manual} game
+	header {
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+	reverse_proxy {$CADENCE_UPSTREAM} {
+		header_up -Cookie
+		header_up -Forwarded
+		header_up -X-Forwarded-For
+		header_up -X-Forwarded-Host
+		header_up -X-Forwarded-Proto
+		header_up -X-Real-IP
+		header_up X-Forwarded-For {remote_host}
+	}
+}
