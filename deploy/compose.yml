@@ -110,10 +110,10 @@ services:
   cadence:
     image: techmino-cadence:${IMAGE_TAG:-local}
     build:
-      context: ${CADENCE_REPO_DIR:-../../../OtherProjects/Cadence}
+      context: ${CADENCE_REPO_DIR:-../../Cadence}
       dockerfile: Dockerfile
       additional_contexts:
-        techmino: ${TECHMINO_SOURCE_DIR:-../../../OtherProjects/Techmino}
+        techmino: ${TECHMINO_SOURCE_DIR:-../../Techmino}
     env_file:
       - ./runtime/cadence.env
     volumes:
@@ -142,7 +142,7 @@ services:
   website:
     image: techmino-account-website:${IMAGE_TAG:-local}
     build:
-      context: ${WEBSITE_REPO_DIR:-../../../community-projects/26f-studio/26f-studio}
+      context: ${WEBSITE_REPO_DIR:-../../26f-studio}
       dockerfile: Dockerfile
       args:
         ACCOUNT_HOST: ${ACCOUNT_HOST:?ACCOUNT_HOST is required}
@@ -220,7 +220,7 @@ services:
       - ${BACKUP_DIR:-./backups}:/backup
       - ${RESTORED_DIR:-./restored}:/restored
       - cadence-replays:/replays:ro
-      - ${CADENCE_REPO_DIR:-../../../OtherProjects/Cadence}/sql:/deploy/cadence-sql:ro
+      - ${CADENCE_REPO_DIR:-../../Cadence}/sql:/deploy/cadence-sql:ro
     depends_on:
       postgres:
         condition: service_healthy

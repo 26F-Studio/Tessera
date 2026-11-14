@@ -55,10 +55,10 @@ services:
   cadence:
     image: techmino-cadence:${IMAGE_TAG:-local}
     build:
-      context: ../../../OtherProjects/Cadence
+      context: ../../Cadence
       dockerfile: Dockerfile
       additional_contexts:
-        techmino: ../../../OtherProjects/Techmino
+        techmino: ../../Techmino
     network_mode: host
     env_file:
       - ../.runtime/application/cadence.env
@@ -93,7 +93,7 @@ services:
   website:
     image: techmino-account-website:${IMAGE_TAG:-local}
     build:
-      context: ../../../community-projects/26f-studio/26f-studio
+      context: ../../26f-studio
       dockerfile: Dockerfile
       args:
         ACCOUNT_HOST: localhost
@@ -162,5 +162,5 @@ services:
       - ./backups:/backup
       - ./restored:/restored
       - cadence-replays:/replays:ro
-      - ../../../OtherProjects/Cadence/sql:/deploy/cadence-sql:ro
+      - ../../Cadence/sql:/deploy/cadence-sql:ro
     restart: "no"

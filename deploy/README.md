@@ -129,7 +129,7 @@ now builds all three service images without a global installation or `sudo`.
 `DOCKER_BUILDKIT=1` alone is not a substitute: Compose v2 drives the buildx
 plugin. Only the Cadence image uses `additional_contexts`; the Tessera and
 website images build from a single context, so if BuildKit truly cannot be
-provided, run Cadence natively from `OtherProjects/Cadence` with
+provided, run Cadence natively from `26FStudioProjects/Cadence` with
 `TECHMINO_SOURCE_DIR=<canonical checkout>` and keep the rest of the stack in
 containers.
 
@@ -142,7 +142,7 @@ import is not an implicit bootstrap or deployment operation.
 ## Fresh stack: bootstrap and start
 
 ```sh
-cd /home/particleg/coding/WebstormProjects/Tessera
+cd /home/particleg/coding/26FStudioProjects/Tessera
 
 cp deploy/.env.example deploy/.env
 chmod 600 deploy/.env
@@ -180,7 +180,7 @@ writable on first use and survives restarts; do not remount it at another path.
 
 A fully local exercise of this same fresh stack is possible with the fixture CA:
 `APP_ENV=development`, `MAIL_MODE=local-fixture`, `--profile local-mail`,
-`TESSERA_UPSTREAM_CA=/home/particleg/coding/WebstormProjects/Tessera/.runtime/application/tls/ca.pem`,
+`TESSERA_UPSTREAM_CA=/home/particleg/coding/26FStudioProjects/Tessera/.runtime/application/tls/ca.pem`,
 and two names that your hosts file maps to `127.0.0.1` with certificates issued
 for them. It creates fresh databases, roles, and replay storage; the fixture
 PostgreSQL and the fixture database are not touched.
@@ -346,7 +346,7 @@ That selector file contains paths only, not application credentials. The old
 fixture certificates expired on 2026-10-09 and remain unchanged.
 
 ```sh
-cd /home/particleg/coding/WebstormProjects/Tessera
+cd /home/particleg/coding/26FStudioProjects/Tessera
 export DOCKER_CONFIG="$PWD/.runtime/application/docker-cli"
 docker compose --env-file .runtime/application/local-manual.env \
   -f deploy/compose.local.yml --profile edge build tessera cadence website
@@ -492,7 +492,7 @@ keeps custody of the archive. Both tools run inside the pinned
 `postgres:18.6-alpine` image, so no PostgreSQL client is needed on the host.
 
 ```sh
-cd /home/particleg/coding/WebstormProjects/Tessera
+cd /home/particleg/coding/26FStudioProjects/Tessera
 
 # 1. drain and quiesce
 docker compose -f deploy/compose.yml stop tessera cadence website
